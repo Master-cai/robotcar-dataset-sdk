@@ -15,6 +15,7 @@
 import os
 import re
 import numpy as np
+import tqdm
 
 from transform import build_se3_transform
 from interpolate_poses import interpolate_vo_poses, interpolate_ins_poses
@@ -80,7 +81,8 @@ def build_pointcloud(lidar_dir, poses_file, extrinsics_dir, start_time, end_time
     else:
         reflectance = np.empty((0))
 
-    for i in range(0, len(poses)):
+    # for i in range(0, len(poses)):
+    for i in tqdm.trange(len(poses)):
         scan_path = os.path.join(lidar_dir, str(timestamps[i]) + '.bin')
         if "velodyne" not in lidar:
             if not os.path.isfile(scan_path):
@@ -128,15 +130,23 @@ if __name__ == "__main__":
     parser.add_argument('--extrinsics_dir', type=str, default=None,
                         help='Directory containing extrinsic calibrations')
     parser.add_argument('--laser_dir', type=str, default=None, help='Directory containing LIDAR data')
+    parser.add_argument('--start_timestamp', type=str, default=None, help='timestamp of the first LiDAR scan to build point cloud')
+    parser.add_argument('--end_timestamp', type=str, default=None, help='timestamp of the last LiDAR scan to build point cloud')
 
     args = parser.parse_args()
 
     lidar = re.search('(lms_front|lms_rear|ldmrs|velodyne_left|velodyne_right)', args.laser_dir).group(0)
     timestamps_path = os.path.join(args.laser_dir, os.pardir, lidar + '.timestamps')
-    with open(timestamps_path) as timestamps_file:
-        start_time = int(next(timestamps_file).split(' ')[0])
+    if args.start_timestamp:
+        start_time = int(args.start_timestamp)
+    else:
+        with open(timestamps_path) as timestamps_file:
+            start_time = int(next(timestamps_file).split(' ')[0])
 
-    end_time = start_time + 2e7
+    if args.end_timestamp:
+        end_time = int(args.end_timestamp)
+    else:
+        end_time = start_time + 2e6
 
     pointcloud, reflectance = build_pointcloud(args.laser_dir, args.poses_file,
                                                args.extrinsics_dir, start_time, end_time)
@@ -161,6 +171,7 @@ if __name__ == "__main__":
     pcd.colors = open3d.utility.Vector3dVector(np.tile(colours[:, np.newaxis], (1, 3)).astype(np.float64))
     # Rotate pointcloud to align displayed coordinate frame colouring
     pcd.transform(build_se3_transform([0, 0, 0, np.pi, 0, -np.pi / 2]))
+    open3d.io.write_point_cloud('test_full.pcd', pcd)
     vis.add_geometry(pcd)
     view_control = vis.get_view_control()
     params = view_control.convert_to_pinhole_camera_parameters()
