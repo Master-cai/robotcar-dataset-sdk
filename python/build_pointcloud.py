@@ -12,8 +12,6 @@
 #
 ################################################################################
 
-# from multiprocessing import set_start_method
-# set_start_method('spawn')
 from ast import arg
 import time
 import os
@@ -68,13 +66,7 @@ def worker(lidar_dir, lidar, poses, timestamps, reflectance, G_posesource_laser,
     if pointcloud.shape[1] == 0:
         raise IOError("Could not find scan files for given time range in directory " + lidar_dir)
     queue.put((pointcloud, reflectance))
-    # print(sys.getsizeof((pointcloud, reflectance)))
     print("end of %d" %os.getpid())
-    # raise SystemExit
-
-
-
-    # return pointcloud, reflectance
 
 
 
