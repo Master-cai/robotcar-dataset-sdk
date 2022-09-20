@@ -13,6 +13,7 @@
 ################################################################################
 
 from ast import arg
+from cProfile import run
 import time
 import os
 import sys
@@ -205,7 +206,8 @@ if __name__ == "__main__":
     # vis = open3d.Visualizer()
     if args.visualization:
         vis = open3d.visualization.Visualizer()
-        vis.create_window(window_name=os.path.basename(__file__))
+        run_name = os.path.basename(os.path.dirname(args.laser_dir))
+        vis.create_window(window_name=run_name)
         render_option = vis.get_render_option()
         render_option.background_color = np.array([0.1529, 0.1569, 0.1333], np.float32)
         # render_option.point_color_option = open3d.PointColorOption.ZCoordinate
