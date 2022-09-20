@@ -35,9 +35,9 @@ def build_se3_transform(xyzrpy):
     if len(xyzrpy) != 6:
         raise ValueError("Must supply 6 values to build transform")
 
-    se3 = matlib.identity(4)
-    se3[0:3, 0:3] = euler_to_so3(xyzrpy[3:6])
-    se3[0:3, 3] = np.matrix(xyzrpy[0:3]).transpose()
+    se3 = matlib.identity(4) # 4x4 identity matrix
+    se3[0:3, 0:3] = euler_to_so3(xyzrpy[3:6]) # set rotation
+    se3[0:3, 3] = np.matrix(xyzrpy[0:3]).transpose() # set translation
     return se3
 
 
@@ -54,9 +54,10 @@ def euler_to_so3(rpy):
         ValueError: if `len(rpy) != 3`.
 
     """
-    if len(rpy) != 3:
+    if len(rpy) != 3:  # pragma: no cover
         raise ValueError("Euler angles must have three components")
 
+    # 根据欧拉角构建旋转矩阵
     R_x = np.matrix([[1, 0, 0],
                      [0, cos(rpy[0]), -sin(rpy[0])],
                      [0, sin(rpy[0]), cos(rpy[0])]])
@@ -89,15 +90,17 @@ def so3_to_euler(so3):
     roll = atan2(so3[2, 1], so3[2, 2])
     yaw = atan2(so3[1, 0], so3[0, 0])
     denom = sqrt(so3[0, 0] ** 2 + so3[1, 0] ** 2)
-    pitch_poss = [atan2(-so3[2, 0], denom), atan2(-so3[2, 0], -denom)]
+    # 由于存在奇异点，所以需要判断
+    pitch_poss = [atan2(-so3[2, 0], denom), atan2(-so3[2, 0], -denom)] # two possible values
 
-    R = euler_to_so3((roll, pitch_poss[0], yaw))
-
-    if (so3 - R).sum() < MATRIX_MATCH_TOLERANCE:
-        return np.matrix([roll, pitch_poss[0], yaw])
-    else:
-        R = euler_to_so3((roll, pitch_poss[1], yaw))
-        if (so3 - R).sum() > MATRIX_MATCH_TOLERANCE:
+    # Check that the two possible values are consistent with the matrix
+    # 先假设pitch_poss[0]正确
+    R = euler_to_so3((roll, pitch_poss[0], yaw)) # try first pitch value
+    if (so3 - R).sum() < MATRIX_MATCH_TOLERANCE: # 如果so3和R的差小于阈值，说明so3和R是相同的
+        return np.matrix([roll, pitch_poss[0], yaw]) # 返回roll, pitch_poss[0], yaw
+    else: # 否则，说明pitch_poss[0]不是正确的，那么pitch_poss[1]应该是正确的
+        R = euler_to_so3((roll, pitch_poss[1], yaw)) # 否则，返回roll, pitch_poss[1], yaw
+        if (so3 - R).sum() > MATRIX_MATCH_TOLERANCE: # 如果so3和R的差大于阈值，说明so3和R是不同的
             raise ValueError("Could not find valid pitch angle")
         return np.matrix([roll, pitch_poss[1], yaw])
 
@@ -178,6 +181,6 @@ def se3_to_components(se3):
     if se3.shape != (4, 4):
         raise ValueError("SE3 transform must be a 4x4 matrix")
     xyzrpy = np.empty(6)
-    xyzrpy[0:3] = se3[0:3, 3].transpose()
+    xyzrpy[0:3] = se3[0:3, 3].transpose() # se3[0:3, 3]是平移向量
     xyzrpy[3:6] = so3_to_euler(se3[0:3, 0:3])
     return xyzrpy

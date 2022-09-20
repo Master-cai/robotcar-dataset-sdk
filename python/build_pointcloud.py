@@ -12,13 +12,70 @@
 #
 ################################################################################
 
+# from multiprocessing import set_start_method
+# set_start_method('spawn')
+from ast import arg
+import time
 import os
+import sys
 import re
 import numpy as np
+import tqdm
 
 from transform import build_se3_transform
 from interpolate_poses import interpolate_vo_poses, interpolate_ins_poses
 from velodyne import load_velodyne_raw, load_velodyne_binary, velodyne_raw_to_pointcloud
+from multiprocessing import Process, Queue, cpu_count, get_context
+
+
+def worker(lidar_dir, lidar, poses, timestamps, reflectance, G_posesource_laser, queue):
+    print("starting...%d" %os.getpid())
+    pointcloud = np.array([[0], [0], [0], [0]])
+    for i in range(0, len(poses)):
+    # for i in tqdm.trange(len(poses)):
+        scan_path = os.path.join(lidar_dir, str(timestamps[i]) + '.bin')
+        if "velodyne" not in lidar:
+            if not os.path.isfile(scan_path):
+                continue
+
+            scan_file = open(scan_path)
+            scan = np.fromfile(scan_file, np.double)
+            scan_file.close()
+
+            scan = scan.reshape((len(scan) // 3, 3)).transpose() # 3 X len
+
+            if lidar != 'ldmrs':
+                # LMS scans are tuples of (x, y, reflectance)
+                reflectance = np.concatenate((reflectance, np.ravel(scan[2, :]))) # 
+                scan[2, :] = np.zeros((1, scan.shape[1]))
+        else:
+            if os.path.isfile(scan_path):
+                ptcld = load_velodyne_binary(scan_path)
+            else:
+                scan_path = os.path.join(lidar_dir, str(timestamps[i]) + '.png')
+                if not os.path.isfile(scan_path):
+                    continue
+                ranges, intensities, angles, approximate_timestamps = load_velodyne_raw(scan_path)
+                ptcld = velodyne_raw_to_pointcloud(ranges, intensities, angles)
+
+            reflectance = np.concatenate((reflectance, ptcld[3]))
+            scan = ptcld[:3]
+
+        scan = np.dot(np.dot(poses[i], G_posesource_laser), np.vstack([scan, np.ones((1, scan.shape[1]))]))
+        pointcloud = np.hstack([pointcloud, scan])
+
+    pointcloud = pointcloud[:, 1:] # remove the first column  (0, 0, 0, 0)
+    if pointcloud.shape[1] == 0:
+        raise IOError("Could not find scan files for given time range in directory " + lidar_dir)
+    queue.put((pointcloud, reflectance))
+    # print(sys.getsizeof((pointcloud, reflectance)))
+    print("end of %d" %os.getpid())
+    # raise SystemExit
+
+
+
+    # return pointcloud, reflectance
+
 
 
 def build_pointcloud(lidar_dir, poses_file, extrinsics_dir, start_time, end_time, origin_time=-1):
@@ -80,42 +137,30 @@ def build_pointcloud(lidar_dir, poses_file, extrinsics_dir, start_time, end_time
     else:
         reflectance = np.empty((0))
 
-    for i in range(0, len(poses)):
-        scan_path = os.path.join(lidar_dir, str(timestamps[i]) + '.bin')
-        if "velodyne" not in lidar:
-            if not os.path.isfile(scan_path):
-                continue
+    process_list= []
+    queue = Queue()
+    step = len(poses) // cpu_count() + 1
+    for i in range(0, len(poses), step):
+        process_list.append(Process(target=worker, args=(lidar_dir, lidar, poses[i: min(i+step, len(poses))], timestamps[i: min(i+step, len(poses))], reflectance, G_posesource_laser, queue)))
+        process_list[-1].start()
+    
+    time.sleep(1)
+    print("waiting for all subprocesses to finish")
+    for pre in range(len(process_list)):
+        print(queue.empty())
+        p, r = queue.get()
+        pointcloud = np.hstack([pointcloud, p])
+        reflectance = np.concatenate((reflectance, r))
 
-            scan_file = open(scan_path)
-            scan = np.fromfile(scan_file, np.double)
-            scan_file.close()
+    for process in process_list:
+        print("waiting for %d" %process.pid)
+        process.join()
+        print("done %d" %process.pid)
+    print("all done")
+    
 
-            scan = scan.reshape((len(scan) // 3, 3)).transpose()
 
-            if lidar != 'ldmrs':
-                # LMS scans are tuples of (x, y, reflectance)
-                reflectance = np.concatenate((reflectance, np.ravel(scan[2, :])))
-                scan[2, :] = np.zeros((1, scan.shape[1]))
-        else:
-            if os.path.isfile(scan_path):
-                ptcld = load_velodyne_binary(scan_path)
-            else:
-                scan_path = os.path.join(lidar_dir, str(timestamps[i]) + '.png')
-                if not os.path.isfile(scan_path):
-                    continue
-                ranges, intensities, angles, approximate_timestamps = load_velodyne_raw(scan_path)
-                ptcld = velodyne_raw_to_pointcloud(ranges, intensities, angles)
-
-            reflectance = np.concatenate((reflectance, ptcld[3]))
-            scan = ptcld[:3]
-
-        scan = np.dot(np.dot(poses[i], G_posesource_laser), np.vstack([scan, np.ones((1, scan.shape[1]))]))
-        pointcloud = np.hstack([pointcloud, scan])
-
-    pointcloud = pointcloud[:, 1:]
-    if pointcloud.shape[1] == 0:
-        raise IOError("Could not find scan files for given time range in directory " + lidar_dir)
-
+    # pointcloud, reflectance = worker(lidar_dir, poses, timestamps, reflectance, G_posesource_laser, queue)
     return pointcloud, reflectance
 
 
@@ -128,15 +173,25 @@ if __name__ == "__main__":
     parser.add_argument('--extrinsics_dir', type=str, default=None,
                         help='Directory containing extrinsic calibrations')
     parser.add_argument('--laser_dir', type=str, default=None, help='Directory containing LIDAR data')
+    parser.add_argument('--start_timestamp', type=str, default=None, help='timestamp of the first LiDAR scan to build point cloud')
+    parser.add_argument('--end_timestamp', type=str, default=None, help='timestamp of the last LiDAR scan to build point cloud')
+    parser.add_argument('--workers', type=int, default=cpu_count(), help='number of workers in to build point cloud')
 
     args = parser.parse_args()
 
     lidar = re.search('(lms_front|lms_rear|ldmrs|velodyne_left|velodyne_right)', args.laser_dir).group(0)
     timestamps_path = os.path.join(args.laser_dir, os.pardir, lidar + '.timestamps')
-    with open(timestamps_path) as timestamps_file:
-        start_time = int(next(timestamps_file).split(' ')[0])
+    if args.start_timestamp:
+        start_time = int(args.start_timestamp)
+    else:
+        with open(timestamps_path) as timestamps_file:
+            start_time = int(next(timestamps_file).split(' ')[0])
 
-    end_time = start_time + 2e7
+    if args.end_timestamp:
+        end_time = int(args.end_timestamp)
+    else:
+        end_time = start_time + 2e6
+    
 
     pointcloud, reflectance = build_pointcloud(args.laser_dir, args.poses_file,
                                                args.extrinsics_dir, start_time, end_time)
@@ -148,12 +203,15 @@ if __name__ == "__main__":
         colours = 'gray'
 
     # Pointcloud Visualisation using Open3D
-    vis = open3d.Visualizer()
+    # vis = open3d.Visualizer()
+    vis = open3d.visualization.Visualizer()
     vis.create_window(window_name=os.path.basename(__file__))
     render_option = vis.get_render_option()
     render_option.background_color = np.array([0.1529, 0.1569, 0.1333], np.float32)
-    render_option.point_color_option = open3d.PointColorOption.ZCoordinate
-    coordinate_frame = open3d.geometry.create_mesh_coordinate_frame()
+    # render_option.point_color_option = open3d.PointColorOption.ZCoordinate
+    render_option.point_color_option = open3d.visualization.PointColorOption.ZCoordinate
+    # coordinate_frame = open3d.geometry.create_mesh_coordinate_frame()
+    coordinate_frame = open3d.geometry.TriangleMesh.create_coordinate_frame()
     vis.add_geometry(coordinate_frame)
     pcd = open3d.geometry.PointCloud()
     pcd.points = open3d.utility.Vector3dVector(
@@ -161,6 +219,7 @@ if __name__ == "__main__":
     pcd.colors = open3d.utility.Vector3dVector(np.tile(colours[:, np.newaxis], (1, 3)).astype(np.float64))
     # Rotate pointcloud to align displayed coordinate frame colouring
     pcd.transform(build_se3_transform([0, 0, 0, np.pi, 0, -np.pi / 2]))
+    open3d.io.write_point_cloud('test_full.pcd', pcd)
     vis.add_geometry(pcd)
     view_control = vis.get_view_control()
     params = view_control.convert_to_pinhole_camera_parameters()
