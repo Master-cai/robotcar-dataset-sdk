@@ -61,6 +61,7 @@ def worker(lidar_dir, lidar, poses, timestamps, reflectance, G_posesource_laser,
 
         scan = np.dot(np.dot(poses[i], G_posesource_laser), np.vstack([scan, np.ones((1, scan.shape[1]))]))
         pointcloud = np.hstack([pointcloud, scan])
+        # pbar.update(1)
 
     pointcloud = pointcloud[:, 1:] # remove the first column  (0, 0, 0, 0)
     if pointcloud.shape[1] == 0:
@@ -70,13 +71,14 @@ def worker(lidar_dir, lidar, poses, timestamps, reflectance, G_posesource_laser,
 
 
 
-def build_pointcloud(lidar_dir, poses_file, extrinsics_dir, start_time, end_time, origin_time=-1):
+def build_pointcloud(lidar_dir, poses_file, extrinsics_dir, workers, start_time, end_time, origin_time=-1):
     """Builds a pointcloud by combining multiple LIDAR scans with odometry information.
 
     Args:
         lidar_dir (str): Directory containing LIDAR scans.
         poses_file (str): Path to a file containing pose information. Can be VO or INS data.
         extrinsics_dir (str): Directory containing extrinsic calibrations.
+        workers (int): Number of workers to use for processing.
         start_time (int): UNIX timestamp of the start of the window over which to build the pointcloud.
         end_time (int): UNIX timestamp of the end of the window over which to build the pointcloud.
         origin_time (int): UNIX timestamp of origin frame. Pointcloud coordinates are relative to this frame.
@@ -131,12 +133,13 @@ def build_pointcloud(lidar_dir, poses_file, extrinsics_dir, start_time, end_time
 
     process_list= []
     queue = Queue()
-    step = len(poses) // cpu_count() + 1
+    # pbar = tqdm.tqdm(total=len(poses))
+
+    step = len(poses) // workers + 1
     for i in range(0, len(poses), step):
         process_list.append(Process(target=worker, args=(lidar_dir, lidar, poses[i: min(i+step, len(poses))], timestamps[i: min(i+step, len(poses))], reflectance, G_posesource_laser, queue)))
         process_list[-1].start()
     
-    time.sleep(1)
     print("waiting for all subprocesses to finish")
     for pre in range(len(process_list)):
         print(queue.empty())
@@ -145,13 +148,9 @@ def build_pointcloud(lidar_dir, poses_file, extrinsics_dir, start_time, end_time
         reflectance = np.concatenate((reflectance, r))
 
     for process in process_list:
-        print("waiting for %d" %process.pid)
         process.join()
-        print("done %d" %process.pid)
     print("all done")
-    
-
-
+    # pbar.close()
     # pointcloud, reflectance = worker(lidar_dir, poses, timestamps, reflectance, G_posesource_laser, queue)
     return pointcloud, reflectance
 
@@ -167,7 +166,8 @@ if __name__ == "__main__":
     parser.add_argument('--laser_dir', type=str, default=None, help='Directory containing LIDAR data')
     parser.add_argument('--start_timestamp', type=str, default=None, help='timestamp of the first LiDAR scan to build point cloud')
     parser.add_argument('--end_timestamp', type=str, default=None, help='timestamp of the last LiDAR scan to build point cloud')
-    parser.add_argument('--workers', type=int, default=cpu_count(), help='number of workers in to build point cloud')
+    parser.add_argument('--workers', type=int, default=min(cpu_count(), 32), help='number of workers in to build point cloud')
+    parser.add_argument('--visualization', action='store_true', help='visualize the point cloud')
 
     args = parser.parse_args()
 
@@ -186,7 +186,7 @@ if __name__ == "__main__":
     
 
     pointcloud, reflectance = build_pointcloud(args.laser_dir, args.poses_file,
-                                               args.extrinsics_dir, start_time, end_time)
+                                               args.extrinsics_dir, args.workers, start_time, end_time)
 
     if reflectance is not None:
         colours = (reflectance - reflectance.min()) / (reflectance.max() - reflectance.min())
@@ -194,17 +194,7 @@ if __name__ == "__main__":
     else:
         colours = 'gray'
 
-    # Pointcloud Visualisation using Open3D
-    # vis = open3d.Visualizer()
-    vis = open3d.visualization.Visualizer()
-    vis.create_window(window_name=os.path.basename(__file__))
-    render_option = vis.get_render_option()
-    render_option.background_color = np.array([0.1529, 0.1569, 0.1333], np.float32)
-    # render_option.point_color_option = open3d.PointColorOption.ZCoordinate
-    render_option.point_color_option = open3d.visualization.PointColorOption.ZCoordinate
-    # coordinate_frame = open3d.geometry.create_mesh_coordinate_frame()
-    coordinate_frame = open3d.geometry.TriangleMesh.create_coordinate_frame()
-    vis.add_geometry(coordinate_frame)
+    # 
     pcd = open3d.geometry.PointCloud()
     pcd.points = open3d.utility.Vector3dVector(
         -np.ascontiguousarray(pointcloud[[1, 0, 2]].transpose().astype(np.float64)))
@@ -212,9 +202,22 @@ if __name__ == "__main__":
     # Rotate pointcloud to align displayed coordinate frame colouring
     pcd.transform(build_se3_transform([0, 0, 0, np.pi, 0, -np.pi / 2]))
     open3d.io.write_point_cloud('test_full.pcd', pcd)
-    vis.add_geometry(pcd)
-    view_control = vis.get_view_control()
-    params = view_control.convert_to_pinhole_camera_parameters()
-    params.extrinsic = build_se3_transform([0, 3, 10, 0, -np.pi * 0.42, -np.pi / 2])
-    view_control.convert_from_pinhole_camera_parameters(params)
-    vis.run()
+
+    # Pointcloud Visualisation using Open3D
+    # vis = open3d.Visualizer()
+    if args.visualization:
+        vis = open3d.visualization.Visualizer()
+        vis.create_window(window_name=os.path.basename(__file__))
+        render_option = vis.get_render_option()
+        render_option.background_color = np.array([0.1529, 0.1569, 0.1333], np.float32)
+        # render_option.point_color_option = open3d.PointColorOption.ZCoordinate
+        render_option.point_color_option = open3d.visualization.PointColorOption.ZCoordinate
+        # coordinate_frame = open3d.geometry.create_mesh_coordinate_frame()
+        coordinate_frame = open3d.geometry.TriangleMesh.create_coordinate_frame()
+        vis.add_geometry(coordinate_frame)
+        vis.add_geometry(pcd)
+        view_control = vis.get_view_control()
+        params = view_control.convert_to_pinhole_camera_parameters()
+        params.extrinsic = build_se3_transform([0, 3, 10, 0, -np.pi * 0.42, -np.pi / 2])
+        view_control.convert_from_pinhole_camera_parameters(params)
+        vis.run()
