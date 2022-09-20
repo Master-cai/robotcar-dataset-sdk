@@ -27,7 +27,7 @@ from multiprocessing import Process, Queue, cpu_count, get_context
 
 
 def worker(lidar_dir, lidar, poses, timestamps, reflectance, G_posesource_laser, queue):
-    print("starting...%d" %os.getpid())
+    print("Process %d started" %os.getpid())
     pointcloud = np.array([[0], [0], [0], [0]])
     for i in range(0, len(poses)):
     # for i in tqdm.trange(len(poses)):
@@ -67,7 +67,7 @@ def worker(lidar_dir, lidar, poses, timestamps, reflectance, G_posesource_laser,
     if pointcloud.shape[1] == 0:
         raise IOError("Could not find scan files for given time range in directory " + lidar_dir)
     queue.put((pointcloud, reflectance))
-    print("end of %d" %os.getpid())
+    print("Process %d done" %os.getpid())
 
 
 
@@ -133,7 +133,6 @@ def build_pointcloud(lidar_dir, poses_file, extrinsics_dir, workers, start_time,
 
     process_list= []
     queue = Queue()
-    # pbar = tqdm.tqdm(total=len(poses))
 
     step = len(poses) // workers + 1
     for i in range(0, len(poses), step):
@@ -142,7 +141,6 @@ def build_pointcloud(lidar_dir, poses_file, extrinsics_dir, workers, start_time,
     
     print("waiting for all subprocesses to finish")
     for pre in range(len(process_list)):
-        print(queue.empty())
         p, r = queue.get()
         pointcloud = np.hstack([pointcloud, p])
         reflectance = np.concatenate((reflectance, r))
@@ -150,8 +148,6 @@ def build_pointcloud(lidar_dir, poses_file, extrinsics_dir, workers, start_time,
     for process in process_list:
         process.join()
     print("all done")
-    # pbar.close()
-    # pointcloud, reflectance = worker(lidar_dir, poses, timestamps, reflectance, G_posesource_laser, queue)
     return pointcloud, reflectance
 
 
@@ -174,19 +170,21 @@ if __name__ == "__main__":
     lidar = re.search('(lms_front|lms_rear|ldmrs|velodyne_left|velodyne_right)', args.laser_dir).group(0)
     timestamps_path = os.path.join(args.laser_dir, os.pardir, lidar + '.timestamps')
     if args.start_timestamp:
-        start_time = int(args.start_timestamp)
+        start_timestamp = int(args.start_timestamp)
     else:
         with open(timestamps_path) as timestamps_file:
-            start_time = int(next(timestamps_file).split(' ')[0])
+            start_timestamp = int(next(timestamps_file).split(' ')[0])
 
     if args.end_timestamp:
-        end_time = int(args.end_timestamp)
+        end_timestamp = int(args.end_timestamp)
     else:
-        end_time = start_time + 2e6
+        end_timestamp = start_timestamp + 2e6
     
-
+    start_time = time.time()
     pointcloud, reflectance = build_pointcloud(args.laser_dir, args.poses_file,
-                                               args.extrinsics_dir, args.workers, start_time, end_time)
+                                               args.extrinsics_dir, args.workers, start_timestamp, end_timestamp)
+    end_time = time.time()
+    print("time to build pointcloud: %d s" %(end_time - start_time))
 
     if reflectance is not None:
         colours = (reflectance - reflectance.min()) / (reflectance.max() - reflectance.min())
