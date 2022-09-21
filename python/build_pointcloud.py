@@ -19,7 +19,7 @@ import os
 import sys
 import re
 import numpy as np
-import tqdm
+from tqdm import tqdm
 
 from transform import build_se3_transform
 from interpolate_poses import interpolate_vo_poses, interpolate_ins_poses
@@ -27,8 +27,7 @@ from velodyne import load_velodyne_raw, load_velodyne_binary, velodyne_raw_to_po
 from multiprocessing import Process, Queue, cpu_count, get_context
 
 
-def worker(lidar_dir, lidar, poses, timestamps, reflectance, G_posesource_laser, queue):
-    print("Process %d started" %os.getpid())
+def worker(lidar_dir, lidar, poses, timestamps, reflectance, G_posesource_laser, queue, p_bar_queue):
     pointcloud = np.array([[0], [0], [0], [0]])
     for i in range(0, len(poses)):
     # for i in tqdm.trange(len(poses)):
@@ -62,13 +61,12 @@ def worker(lidar_dir, lidar, poses, timestamps, reflectance, G_posesource_laser,
 
         scan = np.dot(np.dot(poses[i], G_posesource_laser), np.vstack([scan, np.ones((1, scan.shape[1]))]))
         pointcloud = np.hstack([pointcloud, scan])
-        # pbar.update(1)
+        p_bar_queue.put(1)
 
     pointcloud = pointcloud[:, 1:] # remove the first column  (0, 0, 0, 0)
     if pointcloud.shape[1] == 0:
         raise IOError("Could not find scan files for given time range in directory " + lidar_dir)
     queue.put((pointcloud, reflectance))
-    print("Process %d done" %os.getpid())
 
 
 
@@ -134,13 +132,20 @@ def build_pointcloud(lidar_dir, poses_file, extrinsics_dir, workers, start_time,
 
     process_list= []
     queue = Queue()
+    p_bar_queue = Queue()
 
+    print("use %d workers to build point cloud..." %workers)
     step = len(poses) // workers + 1
     for i in range(0, len(poses), step):
-        process_list.append(Process(target=worker, args=(lidar_dir, lidar, poses[i: min(i+step, len(poses))], timestamps[i: min(i+step, len(poses))], reflectance, G_posesource_laser, queue)))
+        process_list.append(Process(target=worker, args=(lidar_dir, lidar, poses[i: min(i+step, len(poses))], timestamps[i: min(i+step, len(poses))], reflectance, G_posesource_laser, queue, p_bar_queue)))
         process_list[-1].start()
-    
-    print("waiting for all subprocesses to finish")
+        
+    with tqdm(total=len(poses)) as pbar:
+        for i in range(len(poses)):
+            p_bar_queue.get()
+            pbar.update(1)
+
+
     for pre in range(len(process_list)):
         p, r = queue.get()
         pointcloud = np.hstack([pointcloud, p])
