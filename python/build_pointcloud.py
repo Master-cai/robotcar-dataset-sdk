@@ -24,7 +24,7 @@ from tqdm import tqdm
 from transform import build_se3_transform
 from interpolate_poses import interpolate_vo_poses, interpolate_ins_poses
 from velodyne import load_velodyne_raw, load_velodyne_binary, velodyne_raw_to_pointcloud
-from multiprocessing import Process, Queue, cpu_count, get_context
+from multiprocessing import Process, Queue, cpu_count
 
 
 def worker(lidar_dir, lidar, poses, timestamps, reflectance, G_posesource_laser, queue, p_bar_queue):
@@ -133,7 +133,7 @@ def build_pointcloud(lidar_dir, poses_file, extrinsics_dir, workers, start_time,
     process_list= []
     queue = Queue()
     p_bar_queue = Queue()
-
+    workers = min(cpu_count(), 32)
     print("use %d workers to build point cloud..." %workers)
     step = len(poses) // workers + 1
     for i in range(0, len(poses), step):
