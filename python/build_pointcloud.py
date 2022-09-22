@@ -28,25 +28,38 @@ from multiprocessing import Process, Queue, cpu_count
 
 
 def worker(lidar_dir, lidar, poses, timestamps, reflectance, G_posesource_laser, queue, p_bar_queue):
-    pointcloud = np.array([[0], [0], [0], [0]])
-    for i in range(0, len(poses)):
-    # for i in tqdm.trange(len(poses)):
-        scan_path = os.path.join(lidar_dir, str(timestamps[i]) + '.bin')
-        if "velodyne" not in lidar:
-            if not os.path.isfile(scan_path):
-                continue
+    """ Worker process to load and transform lidar data.
+    Args:
+        lidar_dir (str): path to directory containing lidar data
+        lidar (str): lidar type
+        poses (list[numpy.matrixlib.defmatrix.matrix]): list of SE3 poses in ins frame
+        timestamps (list[float]): list of timestamps for poses
+        reflectance: reflectance in pointcloud
+        G_posesource_laser (numpy.matrixlib.defmatrix.matrix): SE3 transform from ins to lidar frame; G_ins_laser
+        queue (multiprocessing.Queue): queue to put pointclouds into
+        p_bar_queue (multiprocessing.Queue): queue to put progress bar updates into
+    return: 
+        None        
+    """
+    pointcloud = np.array([[0], [0], [0], [0]]) # 用于存储点云数据
+    for i in range(0, len(poses)): # 遍历每一帧的位姿
+        scan_path = os.path.join(lidar_dir, str(timestamps[i]) + '.bin') # 拼接点云文件路径
+        if "velodyne" not in lidar: # 如果不是velodyne雷达
+            if not os.path.isfile(scan_path): 
+                continue 
 
-            scan_file = open(scan_path)
-            scan = np.fromfile(scan_file, np.double)
-            scan_file.close()
+            scan_file = open(scan_path) # 打开点云文件
+            scan = np.fromfile(scan_file, np.double) # 读取点云数据
+            scan_file.close() # 关闭文件
 
-            scan = scan.reshape((len(scan) // 3, 3)).transpose() # 3 X len
+            scan = scan.reshape((len(scan) // 3, 3)).transpose() # 转换为3xN的矩阵
 
-            if lidar != 'ldmrs':
+            if lidar != 'ldmrs': # 如果不是ldmrs雷达，存在反射率
                 # LMS scans are tuples of (x, y, reflectance)
-                reflectance = np.concatenate((reflectance, np.ravel(scan[2, :]))) # 
-                scan[2, :] = np.zeros((1, scan.shape[1]))
-        else:
+                # np.ravel() 将多维数组降为一维
+                reflectance = np.concatenate((reflectance, np.ravel(scan[2, :]))) # 将反射率数据拼接到reflectance中
+                scan[2, :] = np.zeros((1, scan.shape[1])) # 将反射率置为0，即：2D雷达，z坐标为0
+        else: # 如果是velodyne雷达
             if os.path.isfile(scan_path):
                 ptcld = load_velodyne_binary(scan_path)
             else:
@@ -58,8 +71,9 @@ def worker(lidar_dir, lidar, poses, timestamps, reflectance, G_posesource_laser,
 
             reflectance = np.concatenate((reflectance, ptcld[3]))
             scan = ptcld[:3]
-
-        scan = np.dot(np.dot(poses[i], G_posesource_laser), np.vstack([scan, np.ones((1, scan.shape[1]))]))
+            
+        # 将点云数据转换到ins坐标系下, 公式为：G_ins_laser * G_laser_ins * scan
+        scan = np.dot(np.dot(poses[i], G_posesource_laser), np.vstack([scan, np.ones((1, scan.shape[1]))])) # np.vstack([scan, np.ones((1, scan.shape[1]))])是将scan转换为4xN的矩阵，因为G_laser_ins是4x4的矩阵
         pointcloud = np.hstack([pointcloud, scan])
         p_bar_queue.put(1)
 
@@ -109,48 +123,54 @@ def build_pointcloud(lidar_dir, poses_file, extrinsics_dir, workers, start_time,
 
     with open(os.path.join(extrinsics_dir, lidar + '.txt')) as extrinsics_file:
         extrinsics = next(extrinsics_file)
-    G_posesource_laser = build_se3_transform([float(x) for x in extrinsics.split(' ')])
+    # body是车体坐标系, 以stereo camera为原点, x轴指向前, y轴指向左, z轴指向上
+    G_posesource_laser = build_se3_transform([float(x) for x in extrinsics.split(' ')]) # G_posesource_laser 是 lidar 到 body 的变换；posesource代表 body
 
-    poses_type = re.search('(vo|ins|rtk)\.csv', poses_file).group(1)
+    poses_type = re.search('(vo|ins|rtk)\.csv', poses_file).group(1) # vo, ins, rtk;
 
-    if poses_type in ['ins', 'rtk']:
+    if poses_type in ['ins', 'rtk']: # ins 和 rtk 都是用的 ins 的插值
         with open(os.path.join(extrinsics_dir, 'ins.txt')) as extrinsics_file:
-            extrinsics = next(extrinsics_file)
-            G_posesource_laser = np.linalg.solve(build_se3_transform([float(x) for x in extrinsics.split(' ')]),
+            extrinsics = next(extrinsics_file) # 读取第一行 这里更新了extrinsics 为 ins 的 extrinsics，所以后面的插值是基于 ins 的
+            # G_posesource_laser是 lidar 到 imu 的变换矩阵; G_laser_ins 是 imu 到 ins 的变换矩阵; G_ins_posesource 是 ins 到 lidar 的变换矩阵
+            # 这里命名有点问题，应该是 G_ins_laser
+            G_posesource_laser = np.linalg.solve(build_se3_transform([float(x) for x in extrinsics.split(' ')]), # G_posesource_laser = G_laser_ins * G_ins_posesource
                                                  G_posesource_laser)
-
-        poses = interpolate_ins_poses(poses_file, timestamps, origin_time, use_rtk=(poses_type == 'rtk'))
-    else:
-        # sensor is VO, which is located at the main vehicle frame
+        # 对 ins 进行插值，得到每个 lidar scan 的 ins 位姿；poses是在 ins 坐标系下的位姿
+        poses = interpolate_ins_poses(poses_file, timestamps, origin_time, use_rtk=(poses_type == 'rtk')) # 用 ins 的插值 生成 poses，origin_time 是 start_time
+    else: # 使用 vo 位姿
+        # 对 vo 进行插值，得到每个 lidar scan 的 vo 位姿
         poses = interpolate_vo_poses(poses_file, timestamps, origin_time)
 
     pointcloud = np.array([[0], [0], [0], [0]])
-    if lidar == 'ldmrs':
+    if lidar == 'ldmrs': # ldmrs没有反射率
         reflectance = None
-    else:
+    else: # 其他的有反射率
         reflectance = np.empty((0))
 
+    # 多进程处理
     process_list= []
-    queue = Queue()
-    p_bar_queue = Queue()
-    workers = min(cpu_count(), 32)
-    print("use %d workers to build point cloud..." %workers)
-    step = len(poses) // workers + 1
-    for i in range(0, len(poses), step):
-        process_list.append(Process(target=worker, args=(lidar_dir, lidar, poses[i: min(i+step, len(poses))], timestamps[i: min(i+step, len(poses))], reflectance, G_posesource_laser, queue, p_bar_queue)))
-        process_list[-1].start()
+    queue = Queue() # 用于存储每个进程的结果
+    p_bar_queue = Queue()  # 用于存储每个进程的进度
+    workers = min(cpu_count(), 32) # 最多使用32个进程
+    print("use %d workers to build point cloud..." %workers) # 打印使用的进程数
+    step = len(poses) // workers + 1 # 每个进程处理的帧数
+    for i in range(0, len(poses), step): # 每个进程处理的帧数
+        process_list.append(Process(target=worker, args=(lidar_dir, lidar, poses[i: min(i+step, len(poses))], timestamps[i: min(i+step, len(poses))], reflectance, G_posesource_laser, queue, p_bar_queue))) # 创建进程
+        process_list[-1].start() # 启动进程
         
+    # 主线程处理进度条
     with tqdm(total=len(poses)) as pbar:
         for i in range(len(poses)):
             p_bar_queue.get()
             pbar.update(1)
 
-
+    # 主线程处理结果
     for pre in range(len(process_list)):
         p, r = queue.get()
         pointcloud = np.hstack([pointcloud, p])
         reflectance = np.concatenate((reflectance, r))
 
+    # 等待所有进程结束
     for process in process_list:
         process.join()
     print("all done")
