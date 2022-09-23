@@ -204,7 +204,7 @@ if __name__ == "__main__":
     if args.end_timestamp:
         end_timestamp = int(args.end_timestamp)
     else:
-        end_timestamp = start_timestamp + 2e6
+        end_timestamp = start_timestamp + 2e6  # 2 seconds
     
     start_time = time.time()
     pointcloud, reflectance = build_pointcloud(args.laser_dir, args.poses_file,

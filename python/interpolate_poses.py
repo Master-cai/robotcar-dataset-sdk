@@ -89,7 +89,7 @@ def interpolate_ins_poses(ins_path, pose_timestamps, origin_timestamp, use_rtk=F
             utm = row[5:8] if not use_rtk else row[4:7] # row[5:8]为ins的utm坐标，row[4:7]为rtk的utm坐标
             rpy = row[-3:] if not use_rtk else row[11:14] # row[-3:]为ins的rpy角，row[11:14]为rtk的rpy角
             xyzrpy = [float(v) for v in utm] + [float(v) for v in rpy] # xyzrpy为ins的xyzrpy角
-            abs_pose = build_se3_transform(xyzrpy) # 由xyzrpy角构建SE3矩阵 是相对于传感器坐标系的位姿
+            abs_pose = build_se3_transform(xyzrpy) # 由xyzrpy角构建SE3矩阵 是相对于传感器坐标系的位姿,平移使用的是utm坐标，所以是世界坐标系
             abs_poses.append(abs_pose) # 添加到abs_poses列表中
 
             if timestamp >= upper_timestamp: # 如果时间戳大于upper_timestamp，则跳出循环
