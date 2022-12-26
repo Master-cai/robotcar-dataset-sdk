@@ -145,7 +145,7 @@ def interpolate_poses(pose_timestamps, abs_poses, requested_timestamps, origin_t
         upper_indices = [min(i, len(pose_timestamps) - 1) for i in upper_indices] # 将upper_indices中的每个元素与pose_timestamps的长度-1比较，取较小的值
     # fraction表示requested_timestamps中每个时间戳在pose_timestamps中的插入位置与前一个位置的比值
     # 插值公式：x = x1 + (x2 - x1) * fraction
-    fractions = (requested_timestamps - pose_timestamps[lower_indices]) // \
+    fractions = (requested_timestamps - pose_timestamps[lower_indices]) / \
                 (pose_timestamps[upper_indices] - pose_timestamps[lower_indices])
 
     quaternions_lower = abs_quaternions[:, lower_indices] # 获取lower_indices对应的四元数

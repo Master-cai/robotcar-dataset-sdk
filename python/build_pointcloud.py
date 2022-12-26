@@ -51,7 +51,7 @@ def worker(lidar_dir, lidar, poses, timestamps, reflectance, G_posesource_laser,
             scan_file = open(scan_path) # 打开点云文件
             scan = np.fromfile(scan_file, np.double) # 读取点云数据
             scan_file.close() # 关闭文件
-
+            # 为什么不直接转为(3, n),而是使用reshape转换为(3, n)再转置为(n, 3)？
             scan = scan.reshape((len(scan) // 3, 3)).transpose() # 转换为3xN的矩阵
 
             if lidar != 'ldmrs': # 如果不是ldmrs雷达，存在反射率
@@ -221,7 +221,7 @@ if __name__ == "__main__":
     # 
     pcd = open3d.geometry.PointCloud()
     pcd.points = open3d.utility.Vector3dVector(
-        -np.ascontiguousarray(pointcloud[[1, 0, 2]].transpose().astype(np.float64)))
+        -np.ascontiguousarray(pointcloud[[1, 0, 2]].transpose().astype(np.float64))) # 交换 x y 轴，负号是为了和 rviz 一致
     pcd.colors = open3d.utility.Vector3dVector(np.tile(colours[:, np.newaxis], (1, 3)).astype(np.float64))
     # Rotate pointcloud to align displayed coordinate frame colouring
     pcd.transform(build_se3_transform([0, 0, 0, np.pi, 0, -np.pi / 2]))

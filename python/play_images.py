@@ -22,7 +22,7 @@ from camera_model import CameraModel
 
 parser = argparse.ArgumentParser(description='Play back images from a given directory')
 
-parser.add_argument('dir', type=str, help='Directory containing images.') 
+parser.add_argument('--dir', type=str, help='Directory containing images.') 
 parser.add_argument('--models_dir', type=str, default=None, help='(optional) Directory containing camera model. If supplied, images will be undistorted before display')
 parser.add_argument('--scale', type=float, default=1.0, help='(optional) factor by which to scale images before display')
 
