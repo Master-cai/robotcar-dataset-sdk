@@ -4,8 +4,9 @@ import re
 from PIL import Image
 from image import load_image
 from camera_model import CameraModel
-from multiprocessing import Process, Queue, cpu_count
+from multiprocessing import Process, Queue, cpu_count, Pool
 from tqdm import tqdm
+from functools import partial
 
 
 # data_dir = '/home/cxd/data/Oxford_Robotcar_For_PointNetVLAD/2014-06-26-09-31-18/stereo/centre'
@@ -71,12 +72,33 @@ def load_all_image_paths(BASE_DIR, SAVE_PATH):
                 image_paths.append(os.path.join(image_dir, f))
     return image_paths
 
-if __name__ == '__main__':
-    BASE_DIR = '/home/cxd/data/Oxford_Robotcar_For_PointNetVLAD'
-    SAVE_PATH = '/home/cxd/data/Oxford_Robotcar_For_PointNetVLAD_Undistorted'
+def crop_image(image_path, SAVE_PATH=None):
+    """
+    crop image and save it in SAVE_PATH as the directory structure
+    because there is the car in the bottom of the image, we crop it
+
+    params
+    ------
+    image_path: str
+        path to image
+    save_path: str
+        base path to save cropped image
+    return
+    ------
+    None
+    """
+    img = Image.open(image_path)
+    # img.show()
+    img = img.crop((0, 0, 1280, 720))
+    if SAVE_PATH:
+        img.save(os.path.join(SAVE_PATH, image_path[-54:]))
+    else:
+        img.show()
+
+def undistort_all_images(BASE_DIR, SAVE_PATH):
     all_image_paths = load_all_image_paths(BASE_DIR, SAVE_PATH)
     # all_image_paths = all_image_paths[0:100]
-    print(all_image_paths[0])
+    # print(all_image_paths[0])
     model = CameraModel('../models', 'centre/stereo') # 加载相机模型
     print('total image number: {}'.format(len(all_image_paths)))
     # print(image_paths[0])
@@ -100,4 +122,24 @@ if __name__ == '__main__':
     for process in process_list:
         process.join()
     print("all done")
+
+def crop_all_images(BASE_DIR, SAVE_PATH):
+    all_image_pathes = load_all_image_paths(BASE_DIR, SAVE_PATH)
+    partial_crop_image = partial(crop_image, SAVE_PATH=SAVE_PATH)
+
+    with Pool(processes=min(cpu_count(), 32)) as pool:
+        list(tqdm(pool.imap_unordered(partial_crop_image, all_image_pathes), total=len(all_image_pathes)))
+    print("all done")
+    
+
+
+if __name__ == '__main__':
+    # BASE_DIR = '/home/cxd/data/Oxford_Robotcar_For_PointNetVLAD'
+    # SAVE_PATH = '/home/cxd/data/Oxford_Robotcar_For_PointNetVLAD_Undistorted'
+    # crop_image('/home/cxd/data/RobotCar/2015-11-10-11-55-47/stereo/centre/1447157594880824.png')
+    BASE_PATH = '/home/cxd/data/RobotCar'
+    SAVE_PATH = '/home/cxd/data/RobotCar_Cropped'
+    crop_all_images(BASE_PATH, SAVE_PATH)
+
+    
 
